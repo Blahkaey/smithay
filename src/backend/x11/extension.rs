@@ -122,13 +122,6 @@ extensions! {
         request: (1, 0),
     },
 
-    xfixes {
-        xfixes_query_version,
-        required: true,
-        minimum: (4, 0),
-        request: (4, 0),
-    },
-
     dri3 {
         dri3_query_version,
         required: true,

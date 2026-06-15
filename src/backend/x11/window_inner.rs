@@ -22,11 +22,11 @@ use x11rb::{
     connection::Connection,
     protocol::{
         present::{self, ConnectionExt as _},
-        xfixes::ConnectionExt as _,
         xinput::{self, ConnectionExt as _},
         xproto::{
-            self as x11, AtomEnum, ConnectionExt, CreateWindowAux, Depth, EventMask, PropMode, Screen,
-            UnmapNotifyEvent, WindowClass,
+            self as x11, AtomEnum, ChangeWindowAttributesAux, ConnectionExt, CreateGCAux,
+            CreateWindowAux, Depth, EventMask, GcontextWrapper, PixmapWrapper, PropMode, Rectangle,
+            Screen, UnmapNotifyEvent, WindowClass,
         },
     },
     rust_connection::RustConnection,
@@ -63,6 +63,7 @@ pub(crate) struct WindowInner {
     root: x11::Window,
     pub atoms: Atoms,
     pub cursor_state: Arc<Mutex<CursorState>>,
+    blank_cursor: x11::Cursor,
     pub size: Mutex<Size<u16, Logical>>,
     /// Channel used to send resize notifications to the surface that presents to this window.
     ///
@@ -88,10 +89,13 @@ impl WindowInner {
         visual_id: u32,
         colormap: u32,
         extensions: Extensions,
+        cursor_visible: bool,
         fullscreen: bool,
     ) -> Result<WindowInner, X11Error> {
         let weak = connection;
         let connection = weak.upgrade().unwrap();
+
+        let blank_cursor = create_blank_cursor(&connection, screen.root)?;
 
         // Generate the xid for the window
         let window = connection.generate_id()?;
@@ -119,7 +123,8 @@ impl WindowInner {
             )
             // Border pixel and color map need to be set if our depth may differ from the root depth.
             .border_pixel(screen.black_pixel)
-            .colormap(colormap);
+            .colormap(colormap)
+            .cursor(if cursor_visible { x11rb::NONE } else { blank_cursor });
 
         let _ = connection.create_window(
             depth.depth,
@@ -167,7 +172,11 @@ impl WindowInner {
             id: window,
             root: screen.root,
             atoms,
-            cursor_state: Arc::new(Mutex::new(CursorState::default())),
+            cursor_state: Arc::new(Mutex::new(CursorState {
+                inside_window: false,
+                visible: cursor_visible,
+            })),
+            blank_cursor,
             size: Mutex::new(size),
             next_serial: AtomicU32::new(0),
             last_msc: Arc::new(AtomicU64::new(0)),
@@ -273,11 +282,12 @@ impl WindowInner {
     pub fn set_cursor_visible(&self, visible: bool) {
         if let Some(connection) = self.connection.upgrade() {
             let mut state = self.cursor_state.lock().unwrap();
-            let changed = state.visible != visible;
 
-            if changed && state.inside_window {
-                state.visible = visible;
-                self.update_cursor(&*connection, state.visible);
+            state.visible = visible;
+
+            if state.inside_window {
+                self.update_cursor(&*connection, visible);
+                let _ = connection.flush();
             }
         }
     }
@@ -287,6 +297,7 @@ impl WindowInner {
             let mut state = self.cursor_state.lock().unwrap();
             state.inside_window = true;
             self.update_cursor(&*connection, state.visible);
+            let _ = connection.flush();
         }
     }
 
@@ -295,20 +306,37 @@ impl WindowInner {
             let mut state = self.cursor_state.lock().unwrap();
             state.inside_window = false;
             self.update_cursor(&*connection, true);
+            let _ = connection.flush();
         }
     }
 
     fn update_cursor<C: ConnectionExt>(&self, connection: &C, visible: bool) {
-        let _ = match visible {
-            // This generates a Match error if we did not call Show/HideCursor before. Ignore that error.
-            true => connection
-                .xfixes_show_cursor(self.id)
-                .map(|cookie| cookie.ignore_error()),
-            false => connection
-                .xfixes_hide_cursor(self.id)
-                .map(|cookie| cookie.ignore_error()),
-        };
+        let cursor = if visible { x11rb::NONE } else { self.blank_cursor };
+        let _ = connection
+            .change_window_attributes(self.id, &ChangeWindowAttributesAux::new().cursor(cursor));
     }
+}
+
+fn create_blank_cursor(
+    connection: &RustConnection,
+    drawable: x11::Window,
+) -> Result<x11::Cursor, X11Error> {
+    let pixmap = PixmapWrapper::create_pixmap(connection, 1, drawable, 1, 1)?;
+    let gc = GcontextWrapper::create_gc(connection, pixmap.pixmap(), &CreateGCAux::new().foreground(0))?;
+    connection.poly_fill_rectangle(
+        pixmap.pixmap(),
+        gc.gcontext(),
+        &[Rectangle {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        }],
+    )?;
+
+    let cursor = connection.generate_id()?;
+    connection.create_cursor(cursor, pixmap.pixmap(), pixmap.pixmap(), 0, 0, 0, 0, 0, 0, 0, 0)?;
+    Ok(cursor)
 }
 
 impl PartialEq for WindowInner {
@@ -325,6 +353,7 @@ impl PartialEq for WindowInner {
 impl Drop for WindowInner {
     fn drop(&mut self) {
         if let Some(connection) = self.connection.upgrade() {
+            let _ = connection.free_cursor(self.blank_cursor);
             let _ = connection.destroy_window(self.id);
         }
     }

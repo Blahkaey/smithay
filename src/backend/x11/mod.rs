@@ -432,6 +432,7 @@ impl X11Handle {
 pub struct WindowBuilder<'a> {
     name: Option<&'a str>,
     size: Option<Size<u16, Logical>>,
+    cursor_visible: bool,
     fullscreen: bool,
 }
 
@@ -442,6 +443,7 @@ impl<'a> WindowBuilder<'a> {
         WindowBuilder {
             name: None,
             size: None,
+            cursor_visible: true,
             fullscreen: false,
         }
     }
@@ -472,6 +474,17 @@ impl<'a> WindowBuilder<'a> {
         Self { fullscreen, ..self }
     }
 
+    /// Sets whether a cursor is shown when the pointer is over the window. Defaults to `true`.
+    ///
+    /// When `false`, the window is created with a fully transparent cursor, so compositor draws no cursor 
+    /// over it from the moment it maps, the hidden state is reasserted on every pointer enter.
+    pub fn cursor_visible(self, visible: bool) -> Self {
+        Self {
+            cursor_visible: visible,
+            ..self
+        }
+    }
+
     /// Creates a window using the options specified in the builder.
     pub fn build(self, handle: &X11Handle) -> Result<Window, X11Error> {
         let _guard = handle.span.enter();
@@ -490,6 +503,7 @@ impl<'a> WindowBuilder<'a> {
             inner.visual_id,
             inner.colormap,
             inner.extensions,
+            self.cursor_visible,
             self.fullscreen,
         )?);
 
