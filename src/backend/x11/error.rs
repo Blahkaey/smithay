@@ -41,6 +41,10 @@ pub enum X11Error {
     #[error("An invalid window was used to create an X11 surface")]
     InvalidWindow,
 
+    /// A pointer grab requested via was rejected by the X server.
+    #[error("The pointer grab was rejected by the X server (status {0})")]
+    GrabFailed(u8),
+
     /// The X server is not capable of direct rendering.
     #[error("The X server is not capable of direct rendering")]
     CannotDirectRender,

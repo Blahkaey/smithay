@@ -5,7 +5,7 @@ use crate::{
     backend::input::{
         self, AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
         DeviceCapability, InputBackend, KeyState, KeyboardKeyEvent, Keycode, PointerAxisEvent,
-        PointerButtonEvent, PointerMotionAbsoluteEvent, UnusedEvent,
+        PointerButtonEvent, PointerMotionAbsoluteEvent, PointerMotionEvent, UnusedEvent,
     },
     utils::{Logical, Size},
 };
@@ -227,13 +227,51 @@ impl AbsolutePositionEvent<X11Input> for X11MouseMovedEvent {
     }
 }
 
+/// X11-Backend internal event wrapping raw `X11` motion into a [`PointerMotionEvent`]
+#[derive(Debug, Clone)]
+pub struct X11RelativeMotionEvent {
+    pub(crate) time: u32,
+    pub(crate) dx: f64,
+    pub(crate) dy: f64,
+    pub(crate) dx_unaccel: f64,
+    pub(crate) dy_unaccel: f64,
+}
+
+impl input::Event<X11Input> for X11RelativeMotionEvent {
+    fn time(&self) -> u64 {
+        self.time as u64 * 1000
+    }
+
+    fn device(&self) -> X11VirtualDevice {
+        X11VirtualDevice
+    }
+}
+
+impl PointerMotionEvent<X11Input> for X11RelativeMotionEvent {
+    fn delta_x(&self) -> f64 {
+        self.dx
+    }
+
+    fn delta_y(&self) -> f64 {
+        self.dy
+    }
+
+    fn delta_x_unaccel(&self) -> f64 {
+        self.dx_unaccel
+    }
+
+    fn delta_y_unaccel(&self) -> f64 {
+        self.dy_unaccel
+    }
+}
+
 impl InputBackend for X11Input {
     type Device = X11VirtualDevice;
     type KeyboardKeyEvent = X11KeyboardInputEvent;
     type PointerAxisEvent = X11MouseWheelEvent;
     type PointerButtonEvent = X11MouseInputEvent;
 
-    type PointerMotionEvent = UnusedEvent;
+    type PointerMotionEvent = X11RelativeMotionEvent;
 
     type PointerMotionAbsoluteEvent = X11MouseMovedEvent;
 

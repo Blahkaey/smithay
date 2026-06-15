@@ -108,13 +108,16 @@ use std::{
 };
 use tracing::{debug_span, error, info, instrument, warn};
 use x11rb::{
-    atom_manager,
+    CURRENT_TIME, atom_manager,
     connection::Connection,
     protocol::{
         self as x11, ErrorKind,
         dri3::ConnectionExt as _,
-        xinput,
-        xproto::{ColormapAlloc, ConnectionExt, CreateWindowAux, VisualClass, WindowClass, WindowWrapper},
+        xinput::{self, ConnectionExt as _},
+        xproto::{
+            ColormapAlloc, ConnectionExt, CreateWindowAux, EventMask, GrabMode, GrabStatus,
+            VisualClass, WindowClass, WindowWrapper,
+        },
     },
     rust_connection::{ReplyError, RustConnection},
 };
@@ -424,6 +427,64 @@ impl X11Handle {
             .and_then(|w| w.upgrade())
             .map(Window)
             .map(WindowTemporary)
+    }
+
+    /// Grabs the pointer for the given window and enables raw motion events.
+    pub fn grab_pointer(&self, window: &Window) -> Result<(), X11Error> {
+        let _guard = self.span.enter();
+        let window_id = window.id();
+        let root = {
+            let inner = self.inner.lock().unwrap();
+            if !inner.windows.contains_key(&window_id) {
+                return Err(X11Error::InvalidWindow);
+            }
+            self.connection.setup().roots[inner.screen_number].root
+        };
+
+        let reply = self
+            .connection
+            .grab_pointer(
+                true,
+                window_id,
+                EventMask::NO_EVENT,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+                window_id,
+                x11rb::NONE,
+                CURRENT_TIME,
+            )?
+            .reply()?;
+        if reply.status != GrabStatus::SUCCESS {
+            return Err(X11Error::GrabFailed(u8::from(reply.status)));
+        }
+        self.connection.xinput_xi_select_events(
+            root,
+            &[xinput::EventMask {
+                deviceid: 1,
+                mask: vec![xinput::XIEventMask::RAW_MOTION],
+            }],
+        )?;
+        self.connection.flush()?;
+        Ok(())
+    }
+
+    /// Releases the pointer grab and disables raw motion events.
+    pub fn ungrab_pointer(&self) -> Result<(), X11Error> {
+        let _guard = self.span.enter();
+        self.connection.ungrab_pointer(CURRENT_TIME)?;
+        let root = {
+            let inner = self.inner.lock().unwrap();
+            self.connection.setup().roots[inner.screen_number].root
+        };
+        self.connection.xinput_xi_select_events(
+            root,
+            &[xinput::EventMask {
+                deviceid: 1,
+                mask: vec![],
+            }],
+        )?;
+        self.connection.flush()?;
+        Ok(())
     }
 }
 
@@ -905,6 +966,29 @@ impl X11Inner {
                 }
             }
 
+            x11::Event::XinputRawMotion(raw_motion) => {
+                let mask = raw_motion.valuator_mask.first().copied().unwrap_or(0);
+                let (dx, dy) = raw_motion_delta(mask, &raw_motion.axisvalues);
+                let (dx_unaccel, dy_unaccel) = raw_motion_delta(mask, &raw_motion.axisvalues_raw);
+                if (dx, dy) != (0.0, 0.0) || (dx_unaccel, dy_unaccel) != (0.0, 0.0) {
+                    callback(
+                        Input {
+                            event: InputEvent::PointerMotion {
+                                event: X11RelativeMotionEvent {
+                                    time: raw_motion.time,
+                                    dx,
+                                    dy,
+                                    dx_unaccel,
+                                    dy_unaccel,
+                                },
+                            },
+                            window_id: None,
+                        },
+                        &mut (),
+                    )
+                }
+            }
+
             x11::Event::ConfigureNotify(configure_notify) => {
                 if let Some(window) =
                     X11Inner::window_ref_from_id(inner, &configure_notify.window).and_then(|w| w.upgrade())
@@ -1015,6 +1099,24 @@ fn fixed_point_to_float(value: i32) -> f64 {
     let int = value >> 16;
     let frac = value & 0xffff;
     int as f64 + frac as f64 / u16::MAX as f64
+}
+
+
+fn raw_motion_delta(mask: u32, values: &[xinput::Fp3232]) -> (f64, f64) {
+    let mut values = values
+        .iter()
+        .map(|value| value.integral as f64 + value.frac as f64 / (1u64 << 32) as f64);
+    let dx = if mask & 1 != 0 {
+        values.next().unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let dy = if mask & 2 != 0 {
+        values.next().unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    (dx, dy)
 }
 
 fn egl_init(_: &X11Inner) -> Result<(DrmNode, OwnedFd), EGLInitError> {
