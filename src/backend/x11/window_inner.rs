@@ -88,6 +88,7 @@ impl WindowInner {
         visual_id: u32,
         colormap: u32,
         extensions: Extensions,
+        fullscreen: bool,
     ) -> Result<WindowInner, X11Error> {
         let weak = connection;
         let connection = weak.upgrade().unwrap();
@@ -195,6 +196,17 @@ impl WindowInner {
         )?;
 
         window.set_title(title);
+
+        if fullscreen {
+            connection.change_property32(
+                PropMode::REPLACE,
+                window.id,
+                atoms._NET_WM_STATE,
+                AtomEnum::ATOM,
+                &[atoms._NET_WM_STATE_FULLSCREEN],
+            )?;
+        }
+
         window.map();
 
         // Flush requests to server so window is displayed.

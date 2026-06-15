@@ -432,6 +432,7 @@ impl X11Handle {
 pub struct WindowBuilder<'a> {
     name: Option<&'a str>,
     size: Option<Size<u16, Logical>>,
+    fullscreen: bool,
 }
 
 impl<'a> WindowBuilder<'a> {
@@ -441,6 +442,7 @@ impl<'a> WindowBuilder<'a> {
         WindowBuilder {
             name: None,
             size: None,
+            fullscreen: false,
         }
     }
 
@@ -463,6 +465,13 @@ impl<'a> WindowBuilder<'a> {
         }
     }
 
+    /// Requests that the window is mapped fullscreen. Defaults to false.
+    ///
+    /// When true, _NET_WM_STATE_FULLSCREEN is set before the window is mapped.
+    pub fn fullscreen(self, fullscreen: bool) -> Self {
+        Self { fullscreen, ..self }
+    }
+
     /// Creates a window using the options specified in the builder.
     pub fn build(self, handle: &X11Handle) -> Result<Window, X11Error> {
         let _guard = handle.span.enter();
@@ -481,6 +490,7 @@ impl<'a> WindowBuilder<'a> {
             inner.visual_id,
             inner.colormap,
             inner.extensions,
+            self.fullscreen,
         )?);
 
         let downgrade = Arc::downgrade(&window);
@@ -614,6 +624,8 @@ atom_manager! {
         _NET_WM_NAME,
         UTF8_STRING,
         _SMITHAY_X11_BACKEND_CLOSE,
+        _NET_WM_STATE,
+        _NET_WM_STATE_FULLSCREEN,
     }
 }
 
