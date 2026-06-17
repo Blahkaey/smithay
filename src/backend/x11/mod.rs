@@ -84,7 +84,7 @@ use crate::{
         egl::{EGLDevice, EGLDisplay, Error as EGLError, native::X11DefaultDisplay},
         input::{Axis, ButtonState, InputEvent, KeyState, Keycode},
     },
-    utils::{Logical, Size, x11rb::X11Source},
+    utils::{Logical, Point, Size, x11rb::X11Source},
 };
 use calloop::{EventSource, Poll, PostAction, Readiness, Token, TokenFactory};
 use drm::node::path_to_type;
@@ -493,6 +493,7 @@ impl X11Handle {
 pub struct WindowBuilder<'a> {
     name: Option<&'a str>,
     size: Option<Size<u16, Logical>>,
+    position: Option<Point<i16, Logical>>,
     cursor_visible: bool,
     fullscreen: bool,
 }
@@ -504,6 +505,7 @@ impl<'a> WindowBuilder<'a> {
         WindowBuilder {
             name: None,
             size: None,
+            position: None,
             cursor_visible: true,
             fullscreen: false,
         }
@@ -524,6 +526,16 @@ impl<'a> WindowBuilder<'a> {
     pub fn size(self, size: Size<u16, Logical>) -> Self {
         Self {
             size: Some(size),
+            ..self
+        }
+    }
+
+    /// Sets the initial position of the window in the root coordinate space.
+    ///
+    /// There is no guarantee the window manager will honor this position.
+    pub fn position(self, position: Point<i16, Logical>) -> Self {
+        Self {
+            position: Some(position),
             ..self
         }
     }
@@ -557,6 +569,7 @@ impl<'a> WindowBuilder<'a> {
             Arc::downgrade(&connection),
             &connection.setup().roots[inner.screen_number],
             self.size.unwrap_or_else(|| (1280, 800).into()),
+            self.position,
             self.name.unwrap_or("Smithay"),
             inner.window_format,
             inner.atoms,

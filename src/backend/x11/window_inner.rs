@@ -9,7 +9,7 @@ Pay particular attention to "Section 4: Client to Window Manager Communication"
 
 A link to the ICCCM Section 4: https://tronche.com/gui/x/icccm/sec-4.html
 */
-use crate::utils::{Logical, Size};
+use crate::utils::{Logical, Point, Size};
 
 use super::{Atoms, Window, X11Error, extension::Extensions};
 use drm_fourcc::DrmFourcc;
@@ -20,6 +20,7 @@ use std::sync::{
 };
 use x11rb::{
     connection::Connection,
+    properties::{WmSizeHints, WmSizeHintsSpecification},
     protocol::{
         present::{self, ConnectionExt as _},
         xinput::{self, ConnectionExt as _},
@@ -82,6 +83,7 @@ impl WindowInner {
         connection: Weak<RustConnection>,
         screen: &Screen,
         size: Size<u16, Logical>,
+        position: Option<Point<i16, Logical>>,
         title: &str,
         format: DrmFourcc,
         atoms: Atoms,
@@ -126,12 +128,13 @@ impl WindowInner {
             .colormap(colormap)
             .cursor(if cursor_visible { x11rb::NONE } else { blank_cursor });
 
+        let (x, y) = position.map_or((0, 0), |p| (p.x, p.y));
         let _ = connection.create_window(
             depth.depth,
             window,
             screen.root,
-            0,
-            0,
+            x,
+            y,
             size.w,
             size.h,
             0,
@@ -205,6 +208,18 @@ impl WindowInner {
         )?;
 
         window.set_title(title);
+
+        if let Some(position) = position {
+            let size_hints = WmSizeHints {
+                position: Some((
+                    WmSizeHintsSpecification::UserSpecified,
+                    position.x as i32,
+                    position.y as i32,
+                )),
+                ..WmSizeHints::default()
+            };
+            let _ = size_hints.set_normal_hints(&*connection, window.id);
+        }
 
         if fullscreen {
             connection.change_property32(
